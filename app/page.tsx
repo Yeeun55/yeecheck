@@ -179,6 +179,14 @@ function blockKey(id: string, location: string | null) {
   return `${id}@${location ?? "inbox"}`;
 }
 
+function insertGapKey(
+  type: BlockType,
+  location: string | null,
+  beforeId?: string,
+) {
+  return `gap@${type}@${location ?? "inbox"}@${beforeId ?? "end"}`;
+}
+
 function timeToMinutes(value: string) {
   const [hour, minute] = value.split(":").map(Number);
   return hour * 60 + minute;
@@ -336,7 +344,7 @@ export default function Home() {
     function closePopover(event: MouseEvent) {
       const target = event.target as Element | null;
       const blockRoot = target?.closest("[data-block-id]");
-      if (blockRoot?.getAttribute("data-block-key") !== popoverKey) {
+      if (blockRoot?.getAttribute("data-selection-key") !== popoverKey) {
         setPopoverKey(null);
       }
     }
@@ -356,24 +364,38 @@ export default function Home() {
     );
   }, [data.blocks, selectedTags]);
 
-  function visibleBlockElements() {
+  function isVisibleSelectionElement(element: HTMLElement) {
+    const sidebar = element.closest(".inbox-sidebar");
+    return !sidebar || sidebar.classList.contains("is-open");
+  }
+
+  function navigationElements() {
     return Array.from(
-      document.querySelectorAll<HTMLElement>(".block-item[data-block-key]"),
-    ).filter((element) => {
-      const sidebar = element.closest(".inbox-sidebar");
-      return !sidebar || sidebar.classList.contains("is-open");
-    });
+      document.querySelectorAll<HTMLElement>(
+        ".block-item[data-selection-key], .insert-gap.is-end-gap[data-selection-key]",
+      ),
+    ).filter(isVisibleSelectionElement);
+  }
+
+  function selectionElement(key: string) {
+    return navigationElements().find(
+      (element) => element.dataset.selectionKey === key,
+    );
   }
 
   function blockElement(key: string) {
-    return visibleBlockElements().find(
-      (element) => element.dataset.blockKey === key,
+    return Array.from(
+      document.querySelectorAll<HTMLElement>(
+        ".block-item[data-selection-key]",
+      ),
+    ).filter(isVisibleSelectionElement).find(
+      (element) => element.dataset.selectionKey === key,
     );
   }
 
   function focusBlock(key: string | null) {
     if (!key) return;
-    window.setTimeout(() => blockElement(key)?.focus(), 0);
+    window.setTimeout(() => selectionElement(key)?.focus(), 0);
   }
 
   function focusTitle(key: string) {
@@ -386,15 +408,18 @@ export default function Home() {
     }, 0);
   }
 
-  function moveSelection(direction: -1 | 1) {
-    if (!selectedKey) return;
-    const elements = visibleBlockElements();
+  function moveSelection(direction: -1 | 1, fromKey = selectedKey) {
+    if (!fromKey) return;
+    const elements = navigationElements();
     const currentIndex = elements.findIndex(
-      (element) => element.dataset.blockKey === selectedKey,
+      (element) => element.dataset.selectionKey === fromKey,
     );
     const next = elements[currentIndex + direction];
-    if (!next?.dataset.blockKey) return;
-    setSelectedKey(next.dataset.blockKey);
+    if (!next?.dataset.selectionKey) return;
+    setSelectedKey(next.dataset.selectionKey);
+    setTitleEditingKey(null);
+    setTimeEditingKey(null);
+    setPopoverKey(null);
     next.focus();
   }
 
@@ -408,16 +433,16 @@ export default function Home() {
   }
 
   function nextKeyAfterDelete(instanceKey: string, deletedId: string) {
-    const elements = visibleBlockElements();
+    const elements = navigationElements();
     const currentIndex = elements.findIndex(
-      (element) => element.dataset.blockKey === instanceKey,
+      (element) => element.dataset.selectionKey === instanceKey,
     );
     const candidates = [
       ...elements.slice(currentIndex + 1),
       ...elements.slice(0, currentIndex).reverse(),
     ];
     return candidates.find((element) => element.dataset.blockId !== deletedId)
-      ?.dataset.blockKey ?? null;
+      ?.dataset.selectionKey ?? null;
   }
 
   function updateBlock(id: string, patch: Partial<CalendarBlock>) {
@@ -491,19 +516,22 @@ export default function Home() {
     focusBlock(nextKey);
   }
 
-  function finishTitleEditing(
+  function commitTitleEditing(
     block: CalendarBlock,
-    location: string | null,
-    createNext: boolean,
+    instanceKey: string,
+    deleteWhenEmpty = false,
+    focusCurrent = true,
   ) {
+    if (deleteWhenEmpty && titleDraft.trim() === "") {
+      deleteBlock(block.id, instanceKey);
+      setTitleDraft("");
+      return;
+    }
     updateBlock(block.id, { title: titleDraft });
     setTitleEditingKey(null);
-    if (createNext) {
-      createBlock(block.type, location, {
-        afterId: block.id,
-        parentId: block.type === "todo" ? block.parentId ?? null : undefined,
-      });
-    }
+    setSelectedKey(instanceKey);
+    setTitleDraft("");
+    if (focusCurrent) focusBlock(instanceKey);
   }
 
   function cancelTitleEditing(instanceKey: string) {
@@ -929,7 +957,7 @@ export default function Home() {
           !isTitleEditing && !isTimeEditing && popoverKey !== instanceKey
         }
         data-block-id={block.id}
-        data-block-key={instanceKey}
+        data-selection-key={instanceKey}
         onDragStart={(event) => {
           event.dataTransfer.effectAllowed = "move";
           event.dataTransfer.setData("text/plain", block.id);
@@ -953,12 +981,11 @@ export default function Home() {
           ) {
             return;
           }
-          setSelectedKey(instanceKey);
-          event.currentTarget.focus();
-        }}
-        onDoubleClick={(event) => {
-          if ((event.target as Element).closest(".block-title")) {
+          if (isSelected) {
             beginTitleEditing(block, instanceKey);
+          } else {
+            setSelectedKey(instanceKey);
+            event.currentTarget.focus();
           }
         }}
         onKeyDown={(event) => {
@@ -972,6 +999,10 @@ export default function Home() {
           } else if (event.key === "Delete" || event.key === "Backspace") {
             event.preventDefault();
             deleteBlock(block.id, instanceKey);
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setSelectedKey(null);
+            event.currentTarget.blur();
           }
         }}
       >
@@ -1034,7 +1065,11 @@ export default function Home() {
               aria-label={`${formatTimeRange(block)} 수정`}
               onClick={(event) => {
                 event.stopPropagation();
-                beginTimeEditing(block, instanceKey);
+                if (isSelected) beginTimeEditing(block, instanceKey);
+                else {
+                  setSelectedKey(instanceKey);
+                  focusBlock(instanceKey);
+                }
               }}
             >
               {formatTimeRange(block)}
@@ -1059,10 +1094,30 @@ export default function Home() {
                 if (event.key === "Enter") {
                   event.preventDefault();
                   skipTitleBlurRef.current = instanceKey;
-                  finishTitleEditing(block, location, true);
+                  commitTitleEditing(
+                    block,
+                    instanceKey,
+                    true,
+                  );
                 } else if (event.key === "Escape") {
                   event.preventDefault();
                   cancelTitleEditing(instanceKey);
+                } else if (
+                  event.key === "ArrowDown" ||
+                  event.key === "ArrowUp"
+                ) {
+                  event.preventDefault();
+                  skipTitleBlurRef.current = instanceKey;
+                  commitTitleEditing(
+                    block,
+                    instanceKey,
+                    false,
+                    false,
+                  );
+                  moveSelection(
+                    event.key === "ArrowDown" ? 1 : -1,
+                    instanceKey,
+                  );
                 }
               }}
               onBlur={() => {
@@ -1071,7 +1126,7 @@ export default function Home() {
                   return;
                 }
                 if (titleEditingKey === instanceKey) {
-                  finishTitleEditing(block, location, false);
+                  commitTitleEditing(block, instanceKey, false, false);
                 }
               }}
             />
@@ -1135,20 +1190,41 @@ export default function Home() {
     beforeBlock?: CalendarBlock,
     compact = false,
   ) {
-    const gapKey = `${type}-${date ?? "inbox"}-${beforeBlock?.id ?? "end"}`;
+    const gapKey = insertGapKey(type, date, beforeBlock?.id);
+    const isEndGap = beforeBlock === undefined;
+    const isSelected = selectedKey === gapKey;
+    function addBlockAtGap() {
+      createBlock(type, date, {
+        beforeId: beforeBlock?.id,
+        parentId:
+          type === "todo" ? beforeBlock?.parentId ?? null : undefined,
+      });
+    }
     return (
       <button
         type="button"
         key={gapKey}
-        className={`insert-gap ${compact ? "is-compact" : ""}`}
+        className={`insert-gap ${compact ? "is-compact" : ""} ${isEndGap ? "is-end-gap" : ""} ${isSelected ? "is-selected" : ""}`}
         aria-label="이 위치에 블록 추가"
+        aria-pressed={isSelected}
+        tabIndex={isSelected ? 0 : -1}
+        data-selection-key={gapKey}
         onClick={(event) => {
           event.stopPropagation();
-          createBlock(type, date, {
-            beforeId: beforeBlock?.id,
-            parentId:
-              type === "todo" ? beforeBlock?.parentId ?? null : undefined,
-          });
+          addBlockAtGap();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            moveSelection(
+              event.key === "ArrowDown" ? 1 : -1,
+              gapKey,
+            );
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setSelectedKey(null);
+            event.currentTarget.blur();
+          }
         }}
         onDragOver={(event) => {
           event.preventDefault();

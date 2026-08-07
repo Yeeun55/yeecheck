@@ -93,11 +93,17 @@ select:focus-visible {
   border-radius: 8px;
   background: transparent;
   cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease, opacity 140ms ease,
+    transform 120ms ease;
 }
 
 .icon-button:hover,
 .icon-button.is-active {
   background: var(--hover);
+}
+
+.icon-button:active {
+  transform: scale(0.94);
 }
 
 .view-switcher {
@@ -118,6 +124,7 @@ select:focus-visible {
   font-weight: 600;
   letter-spacing: 0.04em;
   cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease, transform 120ms ease;
 }
 
 .view-switcher button:hover {
@@ -146,6 +153,7 @@ select:focus-visible {
   font-weight: 500;
   letter-spacing: 0.06em;
   cursor: pointer;
+  transition: background-color 160ms ease;
 }
 
 .range-label:hover {
@@ -200,10 +208,13 @@ select:focus-visible {
   color: #686868;
   font-size: 11px;
   cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease,
+    color 160ms ease, transform 120ms ease;
 }
 
 .tag-chip:hover {
   border-color: #aaaaaa;
+  transform: translateY(-1px);
 }
 
 .tag-chip.is-active {
@@ -248,6 +259,7 @@ select:focus-visible {
   border-radius: 11px;
   background: var(--paper);
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.13);
+  animation: popover-in 160ms ease-out;
 }
 
 .tag-editor-topline {
@@ -383,6 +395,7 @@ select:focus-visible {
   background: transparent;
   text-align: left;
   cursor: pointer;
+  transition: background-color 180ms ease;
 }
 
 .day-heading:hover {
@@ -431,12 +444,15 @@ select:focus-visible {
   height: 22px;
   border-radius: 5px;
   opacity: 0;
+  transform: translateX(2px);
+  transition: opacity 140ms ease, transform 140ms ease;
 }
 
 .day-section:hover .section-add,
 .inbox-section:hover .section-add,
 .section-add:focus-visible {
   opacity: 1;
+  transform: translateX(0);
 }
 
 .section-blocks {
@@ -458,14 +474,19 @@ select:focus-visible {
   color: var(--faint);
   opacity: 0;
   cursor: pointer;
-  transition: border-color 100ms ease, background 100ms ease, opacity 100ms ease;
+  transform: scaleY(0.72);
+  transition: border-color 160ms ease, background-color 160ms ease,
+    opacity 160ms ease, transform 160ms ease;
 }
 
 .insert-gap:hover,
-.insert-gap:focus-visible {
+.insert-gap:focus-visible,
+.insert-gap.is-selected {
   border-color: #cfcfcf;
   background: #fafafa;
   opacity: 1;
+  outline: 0;
+  transform: scaleY(1);
 }
 
 .insert-gap.is-compact {
@@ -484,6 +505,9 @@ select:focus-visible {
   border-radius: 5px;
   background: transparent;
   cursor: grab;
+  animation: block-in 150ms ease-out;
+  transition: background-color 170ms ease, opacity 170ms ease,
+    transform 150ms ease;
 }
 
 .block-item:hover {
@@ -492,7 +516,6 @@ select:focus-visible {
 
 .block-item.is-selected {
   background: #f2f2f2;
-  box-shadow: inset 0 0 0 1px #b8b8b8;
 }
 
 .block-item:focus {
@@ -500,7 +523,7 @@ select:focus-visible {
 }
 
 .block-item:focus-visible {
-  box-shadow: inset 0 0 0 1px #777777;
+  background: #f2f2f2;
 }
 
 .block-item:active {
@@ -533,10 +556,13 @@ select:focus-visible {
   width: 10px;
   color: #bcbcbc;
   opacity: 0;
+  transform: translateX(2px);
+  transition: opacity 140ms ease, transform 140ms ease;
 }
 
 .block-item:hover .drag-handle {
   opacity: 1;
+  transform: translateX(0);
 }
 
 .block-check {
@@ -602,6 +628,7 @@ select:focus-visible {
   height: 5px;
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 50%;
+  transition: background-color 180ms ease, transform 160ms ease;
 }
 
 .block-item.is-time {
@@ -658,6 +685,9 @@ select:focus-visible {
   border-radius: 4px;
   background: var(--wash);
   opacity: 0;
+  transform: translateX(3px);
+  transition: background-color 150ms ease, opacity 140ms ease,
+    transform 140ms ease;
 }
 
 .block-settings {
@@ -670,12 +700,10 @@ select:focus-visible {
 
 .block-item:hover .block-settings,
 .block-item:hover .block-delete,
-.block-item.is-selected .block-settings,
-.block-item.is-selected .block-delete,
 .block-settings:focus-visible,
-.block-delete:focus-visible,
-.block-settings.is-active {
+.block-delete:focus-visible {
   opacity: 1;
+  transform: translateX(0);
 }
 
 .block-popover {
@@ -692,6 +720,31 @@ select:focus-visible {
   background: var(--paper);
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.13);
   cursor: default;
+  animation: popover-in 160ms ease-out;
+}
+
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes block-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .popover-header {
