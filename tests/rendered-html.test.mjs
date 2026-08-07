@@ -31,5 +31,7 @@ test("Yeecheck 화면을 서버에서 렌더링해요", async () => {
   assert.match(html, /<title>Yeecheck<\/title>/i);
   assert.match(html, /aria-label="달력 범위"/);
   assert.match(html, /aria-label="보관함"/);
+  assert.match(html, /aria-label="모든 블록에서 태그 숨기기"/);
+  assert.match(html, /aria-label="태그 편집"/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/i);
 });

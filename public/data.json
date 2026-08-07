@@ -1,10 +1,11 @@
 {
-  "version": 2,
+  "version": 3,
+  "showBlockTags": true,
   "tags": [
-    { "id": "work", "name": "업무", "color": "#1f1f1f", "visible": true },
-    { "id": "personal", "name": "개인", "color": "#626262", "visible": true },
-    { "id": "health", "name": "건강", "color": "#a3a3a3", "visible": true },
-    { "id": "study", "name": "공부", "color": "#cecece", "visible": true }
+    { "id": "work", "name": "업무", "color": "#d95c4f", "visible": true },
+    { "id": "personal", "name": "개인", "color": "#4f86c6", "visible": true },
+    { "id": "health", "name": "건강", "color": "#67a35f", "visible": true },
+    { "id": "study", "name": "공부", "color": "#9566b8", "visible": true }
   ],
   "blocks": [
     {

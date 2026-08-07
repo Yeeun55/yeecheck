@@ -64,26 +64,38 @@ type CalendarBlock = {
   endTime?: string;
 };
 
+type CreateBlockOptions = {
+  beforeId?: string;
+  afterId?: string;
+  parentId?: string | null;
+};
+
 type AppData = {
   version: number;
+  showBlockTags?: boolean;
   tags: AppTag[];
   blocks: CalendarBlock[];
 };
 
-const EMPTY_DATA: AppData = { version: 2, tags: [], blocks: [] };
+const EMPTY_DATA: AppData = {
+  version: 3,
+  showBlockTags: true,
+  tags: [],
+  blocks: [],
+};
 const STORAGE_KEY = "yeecheck.data.v1";
 
 const TAG_COLORS = [
-  "#1f1f1f",
-  "#353535",
-  "#4b4b4b",
-  "#626262",
-  "#777777",
-  "#8d8d8d",
-  "#a3a3a3",
-  "#b8b8b8",
-  "#cecece",
-  "#e3e3e3",
+  "#d95c4f",
+  "#df8a3d",
+  "#d1aa37",
+  "#67a35f",
+  "#3f9a8b",
+  "#4f86c6",
+  "#6d70c9",
+  "#9566b8",
+  "#c35f8d",
+  "#8b6b55",
 ];
 
 const BLOCK_META: Record<
@@ -163,10 +175,77 @@ function uid() {
   return `block-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function blockKey(id: string, location: string | null) {
+  return `${id}@${location ?? "inbox"}`;
+}
+
+function timeToMinutes(value: string) {
+  const [hour, minute] = value.split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+function minutesToTime(value: number) {
+  const normalized = ((value % 1440) + 1440) % 1440;
+  return `${pad(Math.floor(normalized / 60))}:${pad(normalized % 60)}`;
+}
+
+function formatTimeRange(block: CalendarBlock) {
+  return `${block.startTime ?? "09:00"} ~ ${block.endTime ?? "10:00"}`;
+}
+
+function parseTimeRange(value: string) {
+  const match = value.match(
+    /^\s*(\d{1,2}):(\d{2})\s*[~～-]\s*(\d{1,2}):(\d{2})\s*$/,
+  );
+  if (!match) return null;
+  const [, startHour, startMinute, endHour, endMinute] = match.map(Number);
+  if (
+    startHour > 23 ||
+    endHour > 23 ||
+    startMinute > 59 ||
+    endMinute > 59
+  ) {
+    return null;
+  }
+  return {
+    startTime: `${pad(startHour)}:${pad(startMinute)}`,
+    endTime: `${pad(endHour)}:${pad(endMinute)}`,
+  };
+}
+
+function orderTodoBlocks(items: CalendarBlock[]) {
+  const ids = new Set(items.map((block) => block.id));
+  const children = new Map<string, CalendarBlock[]>();
+  const roots: CalendarBlock[] = [];
+
+  items.forEach((block) => {
+    if (block.parentId && ids.has(block.parentId)) {
+      const siblings = children.get(block.parentId) ?? [];
+      siblings.push(block);
+      children.set(block.parentId, siblings);
+    } else {
+      roots.push(block);
+    }
+  });
+
+  const result: CalendarBlock[] = [];
+  const visited = new Set<string>();
+  function visit(block: CalendarBlock) {
+    if (visited.has(block.id)) return;
+    visited.add(block.id);
+    result.push(block);
+    (children.get(block.id) ?? []).forEach(visit);
+  }
+  roots.forEach(visit);
+  items.forEach(visit);
+  return result;
+}
+
 function normalizeData(value: AppData): AppData {
   return {
     ...value,
-    version: 2,
+    version: 3,
+    showBlockTags: value.showBlockTags !== false,
     tags: value.tags.map((tagItem) => ({
       ...tagItem,
       visible: tagItem.visible !== false,
@@ -205,11 +284,18 @@ export default function Home() {
   const [tagEditing, setTagEditing] = useState(false);
   const [tagPopoverId, setTagPopoverId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [titleEditingKey, setTitleEditingKey] = useState<string | null>(null);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [timeEditingKey, setTimeEditingKey] = useState<string | null>(null);
+  const [timeDraft, setTimeDraft] = useState("");
+  const [popoverKey, setPopoverKey] = useState<string | null>(null);
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const tagEditSnapshotRef = useRef<AppData | null>(null);
   const tagFilterSnapshotRef = useRef<string[]>([]);
+  const skipTitleBlurRef = useRef<string | null>(null);
+  const skipTimeBlurRef = useRef<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -245,19 +331,19 @@ export default function Home() {
   }, [data, loaded]);
 
   useEffect(() => {
-    if (!editingId) return;
+    if (!popoverKey) return;
 
     function closePopover(event: MouseEvent) {
       const target = event.target as Element | null;
       const blockRoot = target?.closest("[data-block-id]");
-      if (blockRoot?.getAttribute("data-block-id") !== editingId) {
-        setEditingId(null);
+      if (blockRoot?.getAttribute("data-block-key") !== popoverKey) {
+        setPopoverKey(null);
       }
     }
 
     document.addEventListener("mousedown", closePopover);
     return () => document.removeEventListener("mousedown", closePopover);
-  }, [editingId]);
+  }, [popoverKey]);
 
   const dates = useMemo(() => rangeForView(anchor, view), [anchor, view]);
   const todayKey = toDateKey(new Date());
@@ -270,6 +356,70 @@ export default function Home() {
     );
   }, [data.blocks, selectedTags]);
 
+  function visibleBlockElements() {
+    return Array.from(
+      document.querySelectorAll<HTMLElement>(".block-item[data-block-key]"),
+    ).filter((element) => {
+      const sidebar = element.closest(".inbox-sidebar");
+      return !sidebar || sidebar.classList.contains("is-open");
+    });
+  }
+
+  function blockElement(key: string) {
+    return visibleBlockElements().find(
+      (element) => element.dataset.blockKey === key,
+    );
+  }
+
+  function focusBlock(key: string | null) {
+    if (!key) return;
+    window.setTimeout(() => blockElement(key)?.focus(), 0);
+  }
+
+  function focusTitle(key: string) {
+    window.setTimeout(() => {
+      const input = blockElement(key)?.querySelector<HTMLInputElement>(
+        ".block-title:not([readonly])",
+      );
+      input?.focus();
+      input?.select();
+    }, 0);
+  }
+
+  function moveSelection(direction: -1 | 1) {
+    if (!selectedKey) return;
+    const elements = visibleBlockElements();
+    const currentIndex = elements.findIndex(
+      (element) => element.dataset.blockKey === selectedKey,
+    );
+    const next = elements[currentIndex + direction];
+    if (!next?.dataset.blockKey) return;
+    setSelectedKey(next.dataset.blockKey);
+    next.focus();
+  }
+
+  function beginTitleEditing(block: CalendarBlock, instanceKey: string) {
+    setSelectedKey(instanceKey);
+    setPopoverKey(null);
+    setTimeEditingKey(null);
+    setTitleDraft(block.title);
+    setTitleEditingKey(instanceKey);
+    focusTitle(instanceKey);
+  }
+
+  function nextKeyAfterDelete(instanceKey: string, deletedId: string) {
+    const elements = visibleBlockElements();
+    const currentIndex = elements.findIndex(
+      (element) => element.dataset.blockKey === instanceKey,
+    );
+    const candidates = [
+      ...elements.slice(currentIndex + 1),
+      ...elements.slice(0, currentIndex).reverse(),
+    ];
+    return candidates.find((element) => element.dataset.blockId !== deletedId)
+      ?.dataset.blockKey ?? null;
+  }
+
   function updateBlock(id: string, patch: Partial<CalendarBlock>) {
     setData((current) => ({
       ...current,
@@ -279,8 +429,13 @@ export default function Home() {
     }));
   }
 
-  function createBlock(type: BlockType, date: string | null) {
+  function createBlock(
+    type: BlockType,
+    date: string | null,
+    options: CreateBlockOptions = {},
+  ) {
     const id = uid();
+    const instanceKey = blockKey(id, date);
     const block: CalendarBlock = {
       id,
       type,
@@ -289,26 +444,137 @@ export default function Home() {
       tags: [],
       ...(type === "event" ? { endDate: date } : {}),
       ...(type === "todo"
-        ? { completed: false, repeat: "none" as Repeat, parentId: null }
+        ? {
+            completed: false,
+            repeat: "none" as Repeat,
+            parentId: options.parentId ?? null,
+          }
         : {}),
       ...(type === "time" ? { startTime: "09:00", endTime: "10:00" } : {}),
     };
 
-    setData((current) => ({ ...current, blocks: [...current.blocks, block] }));
-    window.setTimeout(() => {
-      const input = document.querySelector<HTMLInputElement>(
-        `[data-block-title="${id}"]`,
-      );
-      input?.focus();
-    }, 30);
+    setData((current) => {
+      const blocks = [...current.blocks];
+      const beforeIndex = options.beforeId
+        ? blocks.findIndex((candidate) => candidate.id === options.beforeId)
+        : -1;
+      const afterIndex = options.afterId
+        ? blocks.findIndex((candidate) => candidate.id === options.afterId)
+        : -1;
+      if (beforeIndex >= 0) blocks.splice(beforeIndex, 0, block);
+      else if (afterIndex >= 0) blocks.splice(afterIndex + 1, 0, block);
+      else blocks.push(block);
+      return { ...current, blocks };
+    });
+    setSelectedKey(instanceKey);
+    setTitleDraft("");
+    setTitleEditingKey(instanceKey);
+    setTimeEditingKey(null);
+    setPopoverKey(null);
+    focusTitle(instanceKey);
   }
 
-  function deleteBlock(id: string) {
+  function deleteBlock(id: string, instanceKey = selectedKey) {
+    const nextKey = instanceKey ? nextKeyAfterDelete(instanceKey, id) : null;
     setData((current) => ({
       ...current,
-      blocks: current.blocks.filter((block) => block.id !== id),
+      blocks: current.blocks
+        .filter((block) => block.id !== id)
+        .map((block) =>
+          block.parentId === id ? { ...block, parentId: null } : block,
+        ),
     }));
-    setEditingId(null);
+    setPopoverKey(null);
+    setTitleEditingKey(null);
+    setTimeEditingKey(null);
+    setSelectedKey(nextKey);
+    focusBlock(nextKey);
+  }
+
+  function finishTitleEditing(
+    block: CalendarBlock,
+    location: string | null,
+    createNext: boolean,
+  ) {
+    updateBlock(block.id, { title: titleDraft });
+    setTitleEditingKey(null);
+    if (createNext) {
+      createBlock(block.type, location, {
+        afterId: block.id,
+        parentId: block.type === "todo" ? block.parentId ?? null : undefined,
+      });
+    }
+  }
+
+  function cancelTitleEditing(instanceKey: string) {
+    skipTitleBlurRef.current = instanceKey;
+    setTitleEditingKey(null);
+    setTitleDraft("");
+    focusBlock(instanceKey);
+  }
+
+  function beginTimeEditing(block: CalendarBlock, instanceKey: string) {
+    setSelectedKey(instanceKey);
+    setTitleEditingKey(null);
+    setPopoverKey(null);
+    setTimeDraft(formatTimeRange(block));
+    setTimeEditingKey(instanceKey);
+    window.setTimeout(() => {
+      const input = blockElement(instanceKey)?.querySelector<HTMLInputElement>(
+        ".time-input",
+      );
+      input?.focus();
+      input?.select();
+    }, 0);
+  }
+
+  function finishTimeEditing(block: CalendarBlock, instanceKey: string) {
+    const parsed = parseTimeRange(timeDraft);
+    if (!parsed) return false;
+    skipTimeBlurRef.current = instanceKey;
+    updateBlock(block.id, parsed);
+    setTimeEditingKey(null);
+    setTimeDraft("");
+    focusBlock(instanceKey);
+    return true;
+  }
+
+  function cancelTimeEditing(instanceKey: string) {
+    skipTimeBlurRef.current = instanceKey;
+    setTimeEditingKey(null);
+    setTimeDraft("");
+    focusBlock(instanceKey);
+  }
+
+  function adjustTimeWithArrow(
+    block: CalendarBlock,
+    input: HTMLInputElement,
+    direction: -1 | 1,
+  ) {
+    const parsed = parseTimeRange(timeDraft) ?? {
+      startTime: block.startTime ?? "09:00",
+      endTime: block.endTime ?? "10:00",
+    };
+    const cursor = input.selectionStart ?? 0;
+    const segment = cursor < 3 ? 0 : cursor < 8 ? 1 : cursor < 11 ? 2 : 3;
+    const startMinutes = timeToMinutes(parsed.startTime);
+    const endMinutes = timeToMinutes(parsed.endTime);
+    const step = segment === 0 || segment === 2 ? 60 : 10;
+    const nextStart =
+      segment < 2 ? minutesToTime(startMinutes + direction * step) : parsed.startTime;
+    const nextEnd =
+      segment >= 2 ? minutesToTime(endMinutes + direction * step) : parsed.endTime;
+    const nextValue = `${nextStart} ~ ${nextEnd}`;
+    const ranges = [
+      [0, 2],
+      [3, 5],
+      [8, 10],
+      [11, 13],
+    ];
+    setTimeDraft(nextValue);
+    window.setTimeout(() => {
+      input.setSelectionRange(ranges[segment][0], ranges[segment][1]);
+    }, 0);
   }
 
   function moveBlock(
@@ -316,28 +582,67 @@ export default function Home() {
     date: string | null,
     type?: BlockType,
     beforeId?: string,
+    parentId?: string | null,
   ) {
     setData((current) => {
       const moving = current.blocks.find((block) => block.id === id);
       if (!moving || (type && moving.type !== type)) return current;
 
+      const descendantIds = new Set<string>();
+      if (moving.type === "todo") {
+        let added = true;
+        while (added) {
+          added = false;
+          current.blocks.forEach((candidate) => {
+            if (
+              candidate.parentId &&
+              (candidate.parentId === id || descendantIds.has(candidate.parentId)) &&
+              !descendantIds.has(candidate.id)
+            ) {
+              descendantIds.add(candidate.id);
+              added = true;
+            }
+          });
+        }
+      }
+      if (parentId && (parentId === id || descendantIds.has(parentId))) {
+        return current;
+      }
+
       const duration =
         moving.type === "event" && moving.date && moving.endDate
           ? diffDays(moving.date, moving.endDate)
           : 0;
-      const moved: CalendarBlock = {
-        ...moving,
-        date,
-        ...(moving.type === "event"
-          ? { endDate: date ? toDateKey(addDays(fromDateKey(date), duration)) : null }
-          : {}),
-      };
-      const remaining = current.blocks.filter((block) => block.id !== id);
+      const groupIds = new Set([id, ...descendantIds]);
+      const movedGroup = current.blocks
+        .filter((block) => groupIds.has(block.id))
+        .map((block) => ({
+          ...block,
+          date,
+          ...(block.id === id && moving.type === "todo"
+            ? { parentId: parentId ?? null }
+            : {}),
+          ...(block.id === id && moving.type === "event"
+            ? {
+                endDate: date
+                  ? toDateKey(addDays(fromDateKey(date), duration))
+                  : null,
+              }
+            : {}),
+        }));
+      const remaining = current.blocks.filter(
+        (block) => !groupIds.has(block.id),
+      );
       const beforeIndex = beforeId
         ? remaining.findIndex((block) => block.id === beforeId)
         : -1;
-      if (beforeIndex >= 0) remaining.splice(beforeIndex, 0, moved);
-      else remaining.push(moved);
+      const parentIndex = parentId
+        ? remaining.findIndex((block) => block.id === parentId)
+        : -1;
+      if (beforeIndex >= 0) remaining.splice(beforeIndex, 0, ...movedGroup);
+      else if (parentIndex >= 0)
+        remaining.splice(parentIndex + 1, 0, ...movedGroup);
+      else remaining.push(...movedGroup);
       return { ...current, blocks: remaining };
     });
   }
@@ -350,7 +655,17 @@ export default function Home() {
   ) {
     event.preventDefault();
     const id = event.dataTransfer.getData("text/plain") || draggedId;
-    if (id) moveBlock(id, date, type, beforeId);
+    if (id) {
+      moveBlock(id, date, type, beforeId, type === "todo" ? null : undefined);
+    }
+    setDraggedId(null);
+  }
+
+  function handleTodoNestDrop(event: DragEvent, parent: CalendarBlock) {
+    event.preventDefault();
+    event.stopPropagation();
+    const id = event.dataTransfer.getData("text/plain") || draggedId;
+    if (id) moveBlock(id, parent.date, "todo", undefined, parent.id);
     setDraggedId(null);
   }
 
@@ -363,11 +678,12 @@ export default function Home() {
       return block.date === date;
     });
 
-    return type === "time"
-      ? items.sort((a, b) =>
-          (a.startTime ?? "").localeCompare(b.startTime ?? ""),
-        )
-      : items;
+    if (type === "time") {
+      return items.sort((a, b) =>
+        (a.startTime ?? "").localeCompare(b.startTime ?? ""),
+      );
+    }
+    return type === "todo" ? orderTodoBlocks(items) : items;
   }
 
   function navigate(direction: -1 | 1) {
@@ -481,7 +797,7 @@ export default function Home() {
       >
         <div className="popover-header">
           <TypeIcon size={15} aria-hidden="true" />
-          <IconButton label="닫기" onClick={() => setEditingId(null)}>
+          <IconButton label="닫기" onClick={() => setPopoverKey(null)}>
             <X size={14} />
           </IconButton>
         </div>
@@ -527,74 +843,24 @@ export default function Home() {
           </div>
         </div>
 
-        {block.type === "time" && (
-          <div className="popover-field">
-            <Clock3 size={14} aria-hidden="true" />
-            <div className="popover-date-range">
-              <input
-                type="time"
-                aria-label="시작 시간"
-                value={block.startTime ?? ""}
-                onChange={(event) =>
-                  updateBlock(block.id, { startTime: event.target.value })
-                }
-              />
-              <input
-                type="time"
-                aria-label="끝 시간"
-                value={block.endTime ?? ""}
-                onChange={(event) =>
-                  updateBlock(block.id, { endTime: event.target.value })
-                }
-              />
-            </div>
-          </div>
-        )}
-
         {block.type === "todo" && (
-          <>
-            <div className="popover-field">
-              <Repeat2 size={14} aria-hidden="true" />
-              <select
-                aria-label="반복"
-                value={block.repeat ?? "none"}
-                onChange={(event) =>
-                  updateBlock(block.id, {
-                    repeat: event.target.value as Repeat,
-                  })
-                }
-              >
-                <option value="none">—</option>
-                <option value="daily">D</option>
-                <option value="weekly">W</option>
-                <option value="monthly">M</option>
-              </select>
-            </div>
-            <div className="popover-field">
-              <Link2 size={14} aria-hidden="true" />
-              <select
-                aria-label="부모 할일"
-                value={block.parentId ?? ""}
-                onChange={(event) =>
-                  updateBlock(block.id, {
-                    parentId: event.target.value || null,
-                  })
-                }
-              >
-                <option value="">—</option>
-                {data.blocks
-                  .filter(
-                    (candidate) =>
-                      candidate.type === "todo" && candidate.id !== block.id,
-                  )
-                  .map((candidate) => (
-                    <option key={candidate.id} value={candidate.id}>
-                      {candidate.title || "·"}
-                    </option>
-                  ))}
-              </select>
-            </div>
-          </>
+          <div className="popover-field">
+            <Repeat2 size={14} aria-hidden="true" />
+            <select
+              aria-label="반복"
+              value={block.repeat ?? "none"}
+              onChange={(event) =>
+                updateBlock(block.id, {
+                  repeat: event.target.value as Repeat,
+                })
+              }
+            >
+              <option value="none">—</option>
+              <option value="daily">매일</option>
+              <option value="weekly">매주</option>
+              <option value="monthly">매월</option>
+            </select>
+          </div>
         )}
 
         <div className="popover-tags" aria-label="태그">
@@ -628,47 +894,42 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="popover-footer">
-          {block.type === "todo" && (
-            <IconButton
-              label={block.completed ? "완료 취소" : "완료"}
-              className={block.completed ? "is-active" : ""}
-              onClick={() =>
-                updateBlock(block.id, { completed: !block.completed })
-              }
-            >
-              {block.completed ? (
-                <CheckSquare2 size={15} />
-              ) : (
-                <Square size={15} />
-              )}
-            </IconButton>
-          )}
-          <IconButton
-            label="삭제"
-            className="delete-button"
-            onClick={() => deleteBlock(block.id)}
-          >
-            <Trash2 size={15} />
-          </IconButton>
-        </div>
       </section>
     );
   }
 
-  function renderBlockItem(block: CalendarBlock, compact = false) {
-    const blockTags = data.tags.filter(
-      (tagItem) => block.tags.includes(tagItem.id) && tagItem.visible !== false,
-    );
+  function renderBlockItem(
+    block: CalendarBlock,
+    compact: boolean,
+    location: string | null,
+  ) {
+    const instanceKey = blockKey(block.id, location);
+    const blockTags =
+      data.showBlockTags === false
+        ? []
+        : data.tags.filter(
+            (tagItem) =>
+              block.tags.includes(tagItem.id) && tagItem.visible !== false,
+          );
     const isChild = block.type === "todo" && Boolean(block.parentId);
     const isTime = block.type === "time";
+    const isSelected = selectedKey === instanceKey;
+    const isTitleEditing = titleEditingKey === instanceKey;
+    const isTimeEditing = timeEditingKey === instanceKey;
 
     return (
-      <article
-        key={block.id}
-        className={`block-item ${block.completed ? "is-complete" : ""} ${isChild ? "is-child" : ""} ${isTime ? "is-time" : ""}`}
-        draggable={editingId !== block.id}
+      <div
+        key={instanceKey}
+        className={`block-item ${block.completed ? "is-complete" : ""} ${isChild ? "is-child" : ""} ${isTime ? "is-time" : ""} ${isSelected ? "is-selected" : ""} ${compact ? "is-compact" : ""}`}
+        role="button"
+        tabIndex={0}
+        aria-pressed={isSelected}
+        aria-label={`${block.title || "빈 블록"} 선택`}
+        draggable={
+          !isTitleEditing && !isTimeEditing && popoverKey !== instanceKey
+        }
         data-block-id={block.id}
+        data-block-key={instanceKey}
         onDragStart={(event) => {
           event.dataTransfer.effectAllowed = "move";
           event.dataTransfer.setData("text/plain", block.id);
@@ -677,8 +938,41 @@ export default function Home() {
         onDragEnd={() => setDraggedId(null)}
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => {
-          event.stopPropagation();
-          handleSectionDrop(event, block.date, block.type, block.id);
+          if (block.type === "todo") handleTodoNestDrop(event, block);
+          else {
+            event.stopPropagation();
+            handleSectionDrop(event, location, block.type, block.id);
+          }
+        }}
+        onClick={(event) => {
+          const target = event.target as Element;
+          if (
+            target.closest("button, select") ||
+            (isTitleEditing && target.closest(".block-title")) ||
+            (isTimeEditing && target.closest(".time-input"))
+          ) {
+            return;
+          }
+          setSelectedKey(instanceKey);
+          event.currentTarget.focus();
+        }}
+        onDoubleClick={(event) => {
+          if ((event.target as Element).closest(".block-title")) {
+            beginTitleEditing(block, instanceKey);
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget) return;
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            moveSelection(event.key === "ArrowDown" ? 1 : -1);
+          } else if (event.key === "Enter") {
+            event.preventDefault();
+            beginTitleEditing(block, instanceKey);
+          } else if (event.key === "Delete" || event.key === "Backspace") {
+            event.preventDefault();
+            deleteBlock(block.id, instanceKey);
+          }
         }}
       >
         <GripVertical className="drag-handle" size={13} aria-hidden="true" />
@@ -686,18 +980,66 @@ export default function Home() {
           <IconButton
             label={block.completed ? "완료 취소" : "완료"}
             className="block-check"
-            onClick={() => updateBlock(block.id, { completed: !block.completed })}
+            onClick={(event) => {
+              event.stopPropagation();
+              setSelectedKey(instanceKey);
+              updateBlock(block.id, { completed: !block.completed });
+            }}
           >
             {block.completed ? <CheckSquare2 size={15} /> : <Square size={15} />}
           </IconButton>
         )}
 
-        {isTime && (
-          <div className="time-cell" aria-label={`${block.startTime}부터 ${block.endTime}`}>
-            <span>{block.startTime}</span>
-            {!compact && <span>{block.endTime}</span>}
-          </div>
-        )}
+        {isTime &&
+          (isTimeEditing ? (
+            <input
+              className="time-input"
+              aria-label="시간 범위"
+              aria-invalid={parseTimeRange(timeDraft) === null}
+              value={timeDraft}
+              onChange={(event) => setTimeDraft(event.target.value)}
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                  event.preventDefault();
+                  adjustTimeWithArrow(
+                    block,
+                    event.currentTarget,
+                    event.key === "ArrowUp" ? 1 : -1,
+                  );
+                } else if (event.key === "Enter") {
+                  event.preventDefault();
+                  finishTimeEditing(block, instanceKey);
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  cancelTimeEditing(instanceKey);
+                }
+              }}
+              onBlur={() => {
+                if (skipTimeBlurRef.current === instanceKey) {
+                  skipTimeBlurRef.current = null;
+                  return;
+                }
+                const parsed = parseTimeRange(timeDraft);
+                if (parsed) updateBlock(block.id, parsed);
+                setTimeEditingKey(null);
+                setTimeDraft("");
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              className="time-cell"
+              aria-label={`${formatTimeRange(block)} 수정`}
+              onClick={(event) => {
+                event.stopPropagation();
+                beginTimeEditing(block, instanceKey);
+              }}
+            >
+              {formatTimeRange(block)}
+            </button>
+          ))}
 
         <div className="block-main">
           <div className="block-title-row">
@@ -705,12 +1047,32 @@ export default function Home() {
               className="block-title"
               data-block-title={block.id}
               aria-label="블록 내용"
-              value={block.title}
-              onChange={(event) =>
-                updateBlock(block.id, { title: event.target.value })
-              }
+              readOnly={!isTitleEditing}
+              tabIndex={isTitleEditing ? 0 : -1}
+              value={isTitleEditing ? titleDraft : block.title}
+              onChange={(event) => setTitleDraft(event.target.value)}
+              onClick={(event) => {
+                if (isTitleEditing) event.stopPropagation();
+              }}
               onKeyDown={(event) => {
-                if (event.key === "Enter") event.currentTarget.blur();
+                event.stopPropagation();
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  skipTitleBlurRef.current = instanceKey;
+                  finishTitleEditing(block, location, true);
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  cancelTitleEditing(instanceKey);
+                }
+              }}
+              onBlur={() => {
+                if (skipTitleBlurRef.current === instanceKey) {
+                  skipTitleBlurRef.current = null;
+                  return;
+                }
+                if (titleEditingKey === instanceKey) {
+                  finishTitleEditing(block, location, false);
+                }
               }}
             />
             {block.type === "todo" && block.repeat !== "none" && (
@@ -736,22 +1098,82 @@ export default function Home() {
 
         <IconButton
           label="블록 속성"
-          className={`block-settings ${editingId === block.id ? "is-active" : ""}`}
-          onClick={() =>
-            setEditingId((current) => (current === block.id ? null : block.id))
-          }
+          className={`block-settings ${popoverKey === instanceKey ? "is-active" : ""}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            setSelectedKey(instanceKey);
+            setTitleEditingKey(null);
+            setTimeEditingKey(null);
+            setPopoverKey((current) =>
+              current === instanceKey ? null : instanceKey,
+            );
+          }}
         >
           <Settings2 size={13} />
         </IconButton>
 
-        {editingId === block.id && renderBlockPopover(block)}
-      </article>
+        <IconButton
+          label="블록 삭제"
+          className="block-delete delete-button"
+          onClick={(event) => {
+            event.stopPropagation();
+            setSelectedKey(instanceKey);
+            deleteBlock(block.id, instanceKey);
+          }}
+        >
+          <Trash2 size={13} />
+        </IconButton>
+
+        {popoverKey === instanceKey && renderBlockPopover(block)}
+      </div>
+    );
+  }
+
+  function renderInsertGap(
+    type: BlockType,
+    date: string | null,
+    beforeBlock?: CalendarBlock,
+    compact = false,
+  ) {
+    const gapKey = `${type}-${date ?? "inbox"}-${beforeBlock?.id ?? "end"}`;
+    return (
+      <button
+        type="button"
+        key={gapKey}
+        className={`insert-gap ${compact ? "is-compact" : ""}`}
+        aria-label="이 위치에 블록 추가"
+        onClick={(event) => {
+          event.stopPropagation();
+          createBlock(type, date, {
+            beforeId: beforeBlock?.id,
+            parentId:
+              type === "todo" ? beforeBlock?.parentId ?? null : undefined,
+          });
+        }}
+        onDragOver={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = "move";
+        }}
+        onDrop={(event) => {
+          event.stopPropagation();
+          handleSectionDrop(event, date, type, beforeBlock?.id);
+        }}
+      >
+        <Plus size={compact ? 8 : 10} aria-hidden="true" />
+      </button>
     );
   }
 
   function renderSection(type: BlockType, date: string, compact = false) {
     const items = blocksFor(date, type);
     const TypeIcon = BLOCK_META[type].icon;
+    const sectionRows: ReactNode[] = [];
+    items.forEach((block) => {
+      sectionRows.push(renderInsertGap(type, date, block, compact));
+      sectionRows.push(renderBlockItem(block, compact, date));
+    });
+    sectionRows.push(renderInsertGap(type, date, undefined, compact));
 
     return (
       <section
@@ -774,10 +1196,7 @@ export default function Home() {
           </IconButton>
         </div>
         <div className="section-blocks">
-          {items.map((block) => (
-            renderBlockItem(block, compact)
-          ))}
-          {items.length === 0 && <div className="empty-drop" aria-hidden="true" />}
+          {sectionRows}
         </div>
       </section>
     );
@@ -884,6 +1303,29 @@ export default function Home() {
               }}
             >
               <Tag size={14} />
+            </IconButton>
+            <IconButton
+              label={
+                data.showBlockTags === false
+                  ? "모든 블록에 태그 표시"
+                  : "모든 블록에서 태그 숨기기"
+              }
+              className={`tag-visibility ${
+                data.showBlockTags === false ? "" : "is-active"
+              }`}
+              aria-pressed={data.showBlockTags !== false}
+              onClick={() =>
+                setData((current) => ({
+                  ...current,
+                  showBlockTags: current.showBlockTags === false,
+                }))
+              }
+            >
+              {data.showBlockTags === false ? (
+                <EyeOff size={14} />
+              ) : (
+                <Eye size={14} />
+              )}
             </IconButton>
             {data.tags.map((tagItem) => (
               <button
@@ -1015,7 +1457,11 @@ export default function Home() {
         aria-label="보관함 닫기"
         onClick={() => setSidebarOpen(false)}
       />
-      <aside className={`inbox-sidebar ${sidebarOpen ? "is-open" : ""}`} aria-label="보관함">
+      <aside
+        className={`inbox-sidebar ${sidebarOpen ? "is-open" : ""}`}
+        aria-label="보관함"
+        aria-hidden={!sidebarOpen}
+      >
         <div className="sidebar-header">
           <Inbox size={18} aria-hidden="true" />
           <div className="sidebar-actions">
@@ -1046,9 +1492,17 @@ export default function Home() {
         >
           {(Object.keys(BLOCK_META) as BlockType[]).map((type) => {
             const TypeIcon = BLOCK_META[type].icon;
-            const items = visibleBlocks.filter(
+            const filteredItems = visibleBlocks.filter(
               (block) => block.type === type && block.date === null,
             );
+            const items =
+              type === "todo" ? orderTodoBlocks(filteredItems) : filteredItems;
+            const sectionRows: ReactNode[] = [];
+            items.forEach((block) => {
+              sectionRows.push(renderInsertGap(type, null, block));
+              sectionRows.push(renderBlockItem(block, false, null));
+            });
+            sectionRows.push(renderInsertGap(type, null));
             return (
               <section className="inbox-section" key={type} aria-label={type}>
                 <div className="section-rail">
@@ -1062,10 +1516,7 @@ export default function Home() {
                   </IconButton>
                 </div>
                 <div className="section-blocks">
-                  {items.map((block) => (
-                    renderBlockItem(block)
-                  ))}
-                  {items.length === 0 && <div className="empty-drop" aria-hidden="true" />}
+                  {sectionRows}
                 </div>
               </section>
             );
