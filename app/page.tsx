@@ -4,16 +4,20 @@ import {
   Archive,
   CalendarDays,
   CalendarRange,
+  Check,
   CheckSquare2,
   ChevronLeft,
   ChevronRight,
   Circle,
   Clock3,
   Download,
+  Eye,
+  EyeOff,
   GripVertical,
   Inbox,
   Link2,
   PanelRightClose,
+  Pencil,
   Plus,
   Repeat2,
   Settings2,
@@ -43,6 +47,7 @@ type AppTag = {
   id: string;
   name: string;
   color: string;
+  visible?: boolean;
 };
 
 type CalendarBlock = {
@@ -65,8 +70,21 @@ type AppData = {
   blocks: CalendarBlock[];
 };
 
-const EMPTY_DATA: AppData = { version: 1, tags: [], blocks: [] };
+const EMPTY_DATA: AppData = { version: 2, tags: [], blocks: [] };
 const STORAGE_KEY = "yeecheck.data.v1";
+
+const TAG_COLORS = [
+  "#1f1f1f",
+  "#353535",
+  "#4b4b4b",
+  "#626262",
+  "#777777",
+  "#8d8d8d",
+  "#a3a3a3",
+  "#b8b8b8",
+  "#cecece",
+  "#e3e3e3",
+];
 
 const BLOCK_META: Record<
   BlockType,
@@ -145,6 +163,17 @@ function uid() {
   return `block-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function normalizeData(value: AppData): AppData {
+  return {
+    ...value,
+    version: 2,
+    tags: value.tags.map((tagItem) => ({
+      ...tagItem,
+      visible: tagItem.visible !== false,
+    })),
+  };
+}
+
 function IconButton({
   label,
   children,
@@ -173,10 +202,14 @@ export default function Home() {
   const [view, setView] = useState<ViewMode>("W");
   const [anchor, setAnchor] = useState(() => new Date());
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [tagEditing, setTagEditing] = useState(false);
+  const [tagPopoverId, setTagPopoverId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
+  const tagEditSnapshotRef = useRef<AppData | null>(null);
+  const tagFilterSnapshotRef = useRef<string[]>([]);
 
   useEffect(() => {
     let active = true;
@@ -186,11 +219,11 @@ export default function Home() {
         const saved = window.localStorage.getItem(STORAGE_KEY);
         if (saved) {
           const parsed = JSON.parse(saved) as AppData;
-          if (active) setData(parsed);
+          if (active) setData(normalizeData(parsed));
         } else {
           const response = await fetch("/data.json");
           const parsed = (await response.json()) as AppData;
-          if (active) setData(parsed);
+          if (active) setData(normalizeData(parsed));
         }
       } catch {
         if (active) setData(EMPTY_DATA);
@@ -211,9 +244,24 @@ export default function Home() {
     }
   }, [data, loaded]);
 
+  useEffect(() => {
+    if (!editingId) return;
+
+    function closePopover(event: MouseEvent) {
+      const target = event.target as Element | null;
+      const blockRoot = target?.closest("[data-block-id]");
+      if (blockRoot?.getAttribute("data-block-id") !== editingId) {
+        setEditingId(null);
+      }
+    }
+
+    document.addEventListener("mousedown", closePopover);
+    return () => document.removeEventListener("mousedown", closePopover);
+  }, [editingId]);
+
   const dates = useMemo(() => rangeForView(anchor, view), [anchor, view]);
   const todayKey = toDateKey(new Date());
-  const editingBlock = data.blocks.find((block) => block.id === editingId);
+  const editingTag = data.tags.find((tagItem) => tagItem.id === tagPopoverId);
 
   const visibleBlocks = useMemo(() => {
     if (selectedTags.length === 0) return data.blocks;
@@ -307,13 +355,19 @@ export default function Home() {
   }
 
   function blocksFor(date: string, type: BlockType) {
-    return visibleBlocks.filter((block) => {
+    const items = visibleBlocks.filter((block) => {
       if (block.type !== type || !block.date) return false;
       if (type === "event" && block.endDate) {
         return date >= block.date && date <= block.endDate;
       }
       return block.date === date;
     });
+
+    return type === "time"
+      ? items.sort((a, b) =>
+          (a.startTime ?? "").localeCompare(b.startTime ?? ""),
+        )
+      : items;
   }
 
   function navigate(direction: -1 | 1) {
@@ -329,6 +383,61 @@ export default function Home() {
         ? current.filter((id) => id !== tagId)
         : [...current, tagId],
     );
+  }
+
+  function startTagEditing() {
+    tagEditSnapshotRef.current = JSON.parse(JSON.stringify(data)) as AppData;
+    tagFilterSnapshotRef.current = [...selectedTags];
+    setTagEditing(true);
+    setTagPopoverId(null);
+  }
+
+  function cancelTagEditing() {
+    if (tagEditSnapshotRef.current) setData(tagEditSnapshotRef.current);
+    setSelectedTags(tagFilterSnapshotRef.current);
+    tagEditSnapshotRef.current = null;
+    setTagPopoverId(null);
+    setTagEditing(false);
+  }
+
+  function finishTagEditing() {
+    tagEditSnapshotRef.current = null;
+    setTagPopoverId(null);
+    setTagEditing(false);
+  }
+
+  function createTag() {
+    const id = `tag-${Date.now()}`;
+    setData((current) => ({
+      ...current,
+      tags: [
+        ...current.tags,
+        { id, name: "", color: TAG_COLORS[4], visible: true },
+      ],
+    }));
+    setTagPopoverId(id);
+  }
+
+  function updateTag(id: string, patch: Partial<AppTag>) {
+    setData((current) => ({
+      ...current,
+      tags: current.tags.map((tagItem) =>
+        tagItem.id === id ? { ...tagItem, ...patch } : tagItem,
+      ),
+    }));
+  }
+
+  function deleteTag(id: string) {
+    setData((current) => ({
+      ...current,
+      tags: current.tags.filter((tagItem) => tagItem.id !== id),
+      blocks: current.blocks.map((block) => ({
+        ...block,
+        tags: block.tags.filter((tagId) => tagId !== id),
+      })),
+    }));
+    setSelectedTags((current) => current.filter((tagId) => tagId !== id));
+    setTagPopoverId(null);
   }
 
   function exportData() {
@@ -351,7 +460,7 @@ export default function Home() {
       try {
         const parsed = JSON.parse(String(reader.result)) as AppData;
         if (Array.isArray(parsed.blocks) && Array.isArray(parsed.tags)) {
-          setData(parsed);
+          setData(normalizeData(parsed));
         }
       } catch {
         event.target.value = "";
@@ -360,17 +469,205 @@ export default function Home() {
     reader.readAsText(file);
   }
 
-  function BlockItem({ block, compact = false }: { block: CalendarBlock; compact?: boolean }) {
+  function renderBlockPopover(block: CalendarBlock) {
     const TypeIcon = BLOCK_META[block.type].icon;
-    const blockTags = data.tags.filter((tagItem) =>
-      block.tags.includes(tagItem.id),
+
+    return (
+      <section
+        className="block-popover"
+        role="dialog"
+        aria-label="블록 속성"
+        onDragStart={(event) => event.stopPropagation()}
+      >
+        <div className="popover-header">
+          <TypeIcon size={15} aria-hidden="true" />
+          <IconButton label="닫기" onClick={() => setEditingId(null)}>
+            <X size={14} />
+          </IconButton>
+        </div>
+
+        <div className="popover-field">
+          <CalendarDays size={14} aria-hidden="true" />
+          <div className="popover-date-range">
+            <input
+              type="date"
+              aria-label="날짜"
+              value={block.date ?? ""}
+              onChange={(event) => {
+                const nextDate = event.target.value || null;
+                const duration =
+                  block.type === "event" && block.date && block.endDate
+                    ? diffDays(block.date, block.endDate)
+                    : 0;
+                updateBlock(block.id, {
+                  date: nextDate,
+                  ...(block.type === "event"
+                    ? {
+                        endDate: nextDate
+                          ? toDateKey(addDays(fromDateKey(nextDate), duration))
+                          : null,
+                      }
+                    : {}),
+                });
+              }}
+            />
+            {block.type === "event" && (
+              <input
+                type="date"
+                aria-label="끝 날짜"
+                min={block.date ?? undefined}
+                value={block.endDate ?? ""}
+                onChange={(event) =>
+                  updateBlock(block.id, {
+                    endDate: event.target.value || block.date,
+                  })
+                }
+              />
+            )}
+          </div>
+        </div>
+
+        {block.type === "time" && (
+          <div className="popover-field">
+            <Clock3 size={14} aria-hidden="true" />
+            <div className="popover-date-range">
+              <input
+                type="time"
+                aria-label="시작 시간"
+                value={block.startTime ?? ""}
+                onChange={(event) =>
+                  updateBlock(block.id, { startTime: event.target.value })
+                }
+              />
+              <input
+                type="time"
+                aria-label="끝 시간"
+                value={block.endTime ?? ""}
+                onChange={(event) =>
+                  updateBlock(block.id, { endTime: event.target.value })
+                }
+              />
+            </div>
+          </div>
+        )}
+
+        {block.type === "todo" && (
+          <>
+            <div className="popover-field">
+              <Repeat2 size={14} aria-hidden="true" />
+              <select
+                aria-label="반복"
+                value={block.repeat ?? "none"}
+                onChange={(event) =>
+                  updateBlock(block.id, {
+                    repeat: event.target.value as Repeat,
+                  })
+                }
+              >
+                <option value="none">—</option>
+                <option value="daily">D</option>
+                <option value="weekly">W</option>
+                <option value="monthly">M</option>
+              </select>
+            </div>
+            <div className="popover-field">
+              <Link2 size={14} aria-hidden="true" />
+              <select
+                aria-label="부모 할일"
+                value={block.parentId ?? ""}
+                onChange={(event) =>
+                  updateBlock(block.id, {
+                    parentId: event.target.value || null,
+                  })
+                }
+              >
+                <option value="">—</option>
+                {data.blocks
+                  .filter(
+                    (candidate) =>
+                      candidate.type === "todo" && candidate.id !== block.id,
+                  )
+                  .map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.title || "·"}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          </>
+        )}
+
+        <div className="popover-tags" aria-label="태그">
+          <Tag size={14} aria-hidden="true" />
+          <div className="popover-tag-list">
+            {data.tags.map((tagItem) => {
+              const selected = block.tags.includes(tagItem.id);
+              return (
+                <button
+                  type="button"
+                  key={tagItem.id}
+                  className={`tag-chip ${selected ? "is-active" : ""}`}
+                  aria-pressed={selected}
+                  onClick={() =>
+                    updateBlock(block.id, {
+                      tags: selected
+                        ? block.tags.filter((id) => id !== tagItem.id)
+                        : [...block.tags, tagItem.id],
+                    })
+                  }
+                >
+                  <span
+                    className="tag-dot"
+                    style={{ backgroundColor: tagItem.color }}
+                    aria-hidden="true"
+                  />
+                  {tagItem.name || "·"}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="popover-footer">
+          {block.type === "todo" && (
+            <IconButton
+              label={block.completed ? "완료 취소" : "완료"}
+              className={block.completed ? "is-active" : ""}
+              onClick={() =>
+                updateBlock(block.id, { completed: !block.completed })
+              }
+            >
+              {block.completed ? (
+                <CheckSquare2 size={15} />
+              ) : (
+                <Square size={15} />
+              )}
+            </IconButton>
+          )}
+          <IconButton
+            label="삭제"
+            className="delete-button"
+            onClick={() => deleteBlock(block.id)}
+          >
+            <Trash2 size={15} />
+          </IconButton>
+        </div>
+      </section>
+    );
+  }
+
+  function renderBlockItem(block: CalendarBlock, compact = false) {
+    const blockTags = data.tags.filter(
+      (tagItem) => block.tags.includes(tagItem.id) && tagItem.visible !== false,
     );
     const isChild = block.type === "todo" && Boolean(block.parentId);
+    const isTime = block.type === "time";
 
     return (
       <article
-        className={`block-item ${block.completed ? "is-complete" : ""} ${isChild ? "is-child" : ""}`}
-        draggable
+        key={block.id}
+        className={`block-item ${block.completed ? "is-complete" : ""} ${isChild ? "is-child" : ""} ${isTime ? "is-time" : ""}`}
+        draggable={editingId !== block.id}
         data-block-id={block.id}
         onDragStart={(event) => {
           event.dataTransfer.effectAllowed = "move";
@@ -385,7 +682,7 @@ export default function Home() {
         }}
       >
         <GripVertical className="drag-handle" size={13} aria-hidden="true" />
-        {block.type === "todo" ? (
+        {block.type === "todo" && (
           <IconButton
             label={block.completed ? "완료 취소" : "완료"}
             className="block-check"
@@ -393,51 +690,45 @@ export default function Home() {
           >
             {block.completed ? <CheckSquare2 size={15} /> : <Square size={15} />}
           </IconButton>
-        ) : (
-          <TypeIcon className="type-icon" size={14} aria-hidden="true" />
+        )}
+
+        {isTime && (
+          <div className="time-cell" aria-label={`${block.startTime}부터 ${block.endTime}`}>
+            <span>{block.startTime}</span>
+            {!compact && <span>{block.endTime}</span>}
+          </div>
         )}
 
         <div className="block-main">
-          {!compact && block.type === "time" && (
-            <div className="block-meta time-meta">
-              <span>{block.startTime}</span>
-              <span>—</span>
-              <span>{block.endTime}</span>
-            </div>
-          )}
-          {!compact && block.type === "event" && block.endDate !== block.date && (
-            <div className="block-meta">
-              <span>{block.date?.slice(5)}</span>
-              <span>—</span>
-              <span>{block.endDate?.slice(5)}</span>
-            </div>
-          )}
-          <input
-            className="block-title"
-            data-block-title={block.id}
-            aria-label="블록 내용"
-            value={block.title}
-            onChange={(event) => updateBlock(block.id, { title: event.target.value })}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") event.currentTarget.blur();
-            }}
-          />
-          {!compact && (
-            <div className="block-footer">
-              {block.type === "todo" && block.repeat !== "none" && (
-                <Repeat2 size={11} aria-hidden="true" />
-              )}
-              {block.type === "todo" && block.parentId && (
-                <Link2 size={11} aria-hidden="true" />
-              )}
+          <div className="block-title-row">
+            <input
+              className="block-title"
+              data-block-title={block.id}
+              aria-label="블록 내용"
+              value={block.title}
+              onChange={(event) =>
+                updateBlock(block.id, { title: event.target.value })
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+              }}
+            />
+            {block.type === "todo" && block.repeat !== "none" && (
+              <Repeat2 className="repeat-mark" size={11} aria-hidden="true" />
+            )}
+            {block.type === "todo" && block.parentId && (
+              <Link2 className="parent-mark" size={11} aria-hidden="true" />
+            )}
+          </div>
+          {blockTags.length > 0 && (
+            <div className="block-tag-dots" aria-label="태그">
               {blockTags.map((tagItem) => (
                 <span
-                  className="mini-tag"
+                  className="block-tag-dot"
                   key={tagItem.id}
-                  style={{ "--tag-color": tagItem.color } as React.CSSProperties}
-                >
-                  {tagItem.name}
-                </span>
+                  style={{ backgroundColor: tagItem.color }}
+                  aria-label={tagItem.name}
+                />
               ))}
             </div>
           )}
@@ -445,24 +736,20 @@ export default function Home() {
 
         <IconButton
           label="블록 속성"
-          className="block-settings"
-          onClick={() => setEditingId(block.id)}
+          className={`block-settings ${editingId === block.id ? "is-active" : ""}`}
+          onClick={() =>
+            setEditingId((current) => (current === block.id ? null : block.id))
+          }
         >
           <Settings2 size={13} />
         </IconButton>
+
+        {editingId === block.id && renderBlockPopover(block)}
       </article>
     );
   }
 
-  function Section({
-    type,
-    date,
-    compact = false,
-  }: {
-    type: BlockType;
-    date: string;
-    compact?: boolean;
-  }) {
+  function renderSection(type: BlockType, date: string, compact = false) {
     const items = blocksFor(date, type);
     const TypeIcon = BLOCK_META[type].icon;
 
@@ -478,7 +765,6 @@ export default function Home() {
       >
         <div className="section-rail">
           <TypeIcon size={compact ? 12 : 14} aria-hidden="true" />
-          <span className="section-line" />
           <IconButton
             label="블록 추가"
             className="section-add"
@@ -489,7 +775,7 @@ export default function Home() {
         </div>
         <div className="section-blocks">
           {items.map((block) => (
-            <BlockItem key={block.id} block={block} compact={compact} />
+            renderBlockItem(block, compact)
           ))}
           {items.length === 0 && <div className="empty-drop" aria-hidden="true" />}
         </div>
@@ -497,13 +783,14 @@ export default function Home() {
     );
   }
 
-  function DayColumn({ date }: { date: Date }) {
+  function renderDayColumn(date: Date) {
     const dateKey = toDateKey(date);
     const isOutsideMonth = view === "M" && date.getMonth() !== anchor.getMonth();
     const compact = view === "M";
 
     return (
       <article
+        key={dateKey}
         className={`day-column ${dateKey === todayKey ? "is-today" : ""} ${isOutsideMonth ? "is-outside" : ""}`}
       >
         <button
@@ -517,13 +804,12 @@ export default function Home() {
         >
           <span className="weekday">{WEEKDAYS[(date.getDay() + 6) % 7]}</span>
           <span className="date-number">{pad(date.getDate())}</span>
-          {!compact && <span className="date-full">{dateKey}</span>}
         </button>
         <div className="day-content">
-          <Section type="event" date={dateKey} compact={compact} />
-          <Section type="todo" date={dateKey} compact={compact} />
-          <Section type="time" date={dateKey} compact={compact} />
-          <Section type="memo" date={dateKey} compact={compact} />
+          {renderSection("event", dateKey, compact)}
+          {renderSection("todo", dateKey, compact)}
+          {renderSection("time", dateKey, compact)}
+          {renderSection("memo", dateKey, compact)}
         </div>
       </article>
     );
@@ -580,38 +866,146 @@ export default function Home() {
           </IconButton>
         </div>
 
-        <div className="tag-strip" aria-label="태그 필터">
-          <IconButton
-            label="태그 필터 해제"
-            className={selectedTags.length === 0 ? "tag-all is-active" : "tag-all"}
-            onClick={() => setSelectedTags([])}
+        <div className="tag-area">
+          <div
+            className="tag-strip"
+            aria-label={tagEditing ? "태그 편집" : "태그 필터"}
           >
-            <Tag size={14} />
-          </IconButton>
-          {data.tags.map((tagItem) => (
-            <button
-              type="button"
-              key={tagItem.id}
-              className={`tag-chip ${selectedTags.includes(tagItem.id) ? "is-active" : ""}`}
-              aria-pressed={selectedTags.includes(tagItem.id)}
-              onClick={() => toggleTagFilter(tagItem.id)}
+            <IconButton
+              label={tagEditing ? "태그 선택 해제" : "태그 필터 해제"}
+              className={
+                selectedTags.length === 0 && !tagEditing
+                  ? "tag-all is-active"
+                  : "tag-all"
+              }
+              onClick={() => {
+                if (tagEditing) setTagPopoverId(null);
+                else setSelectedTags([]);
+              }}
             >
-              <span
-                className="tag-dot"
-                style={{ backgroundColor: tagItem.color }}
-                aria-hidden="true"
-              />
-              {tagItem.name}
-            </button>
-          ))}
+              <Tag size={14} />
+            </IconButton>
+            {data.tags.map((tagItem) => (
+              <button
+                type="button"
+                key={tagItem.id}
+                className={`tag-chip ${
+                  tagEditing
+                    ? tagPopoverId === tagItem.id
+                      ? "is-editing"
+                      : ""
+                    : selectedTags.includes(tagItem.id)
+                      ? "is-active"
+                      : ""
+                }`}
+                aria-pressed={
+                  tagEditing
+                    ? tagPopoverId === tagItem.id
+                    : selectedTags.includes(tagItem.id)
+                }
+                onClick={() => {
+                  if (tagEditing) setTagPopoverId(tagItem.id);
+                  else toggleTagFilter(tagItem.id);
+                }}
+              >
+                <span
+                  className="tag-dot"
+                  style={{ backgroundColor: tagItem.color }}
+                  aria-hidden="true"
+                />
+                {tagItem.name || "·"}
+              </button>
+            ))}
+          </div>
+
+          <div className="tag-edit-actions">
+            {tagEditing ? (
+              <>
+                <IconButton label="태그 추가" onClick={createTag}>
+                  <Plus size={14} />
+                </IconButton>
+                <IconButton label="태그 편집 취소" onClick={cancelTagEditing}>
+                  <X size={14} />
+                </IconButton>
+                <IconButton label="태그 편집 완료" onClick={finishTagEditing}>
+                  <Check size={15} />
+                </IconButton>
+              </>
+            ) : (
+              <IconButton label="태그 편집" onClick={startTagEditing}>
+                <Pencil size={14} />
+              </IconButton>
+            )}
+          </div>
+
+          {tagEditing && editingTag && (
+            <section className="tag-editor-popover" aria-label="태그 속성">
+              <div className="tag-editor-topline">
+                <span
+                  className="tag-preview-dot"
+                  style={{ backgroundColor: editingTag.color }}
+                  aria-hidden="true"
+                />
+                <input
+                  className="tag-name-input"
+                  aria-label="태그 이름"
+                  value={editingTag.name}
+                  onChange={(event) =>
+                    updateTag(editingTag.id, { name: event.target.value })
+                  }
+                />
+                <IconButton
+                  label={
+                    editingTag.visible === false
+                      ? "블록에 태그 표시"
+                      : "블록에서 태그 숨기기"
+                  }
+                  className={editingTag.visible === false ? "" : "is-active"}
+                  aria-pressed={editingTag.visible !== false}
+                  onClick={() =>
+                    updateTag(editingTag.id, {
+                      visible: editingTag.visible === false,
+                    })
+                  }
+                >
+                  {editingTag.visible === false ? (
+                    <EyeOff size={14} />
+                  ) : (
+                    <Eye size={14} />
+                  )}
+                </IconButton>
+                <IconButton
+                  label="태그 삭제"
+                  className="delete-button"
+                  onClick={() => deleteTag(editingTag.id)}
+                >
+                  <Trash2 size={14} />
+                </IconButton>
+              </div>
+              <div className="tag-palette" aria-label="태그 색상">
+                {TAG_COLORS.map((color, index) => (
+                  <button
+                    type="button"
+                    key={color}
+                    className={`tag-color-button ${
+                      editingTag.color === color ? "is-active" : ""
+                    }`}
+                    aria-label={`태그 색상 ${index + 1}`}
+                    aria-pressed={editingTag.color === color}
+                    onClick={() => updateTag(editingTag.id, { color })}
+                  >
+                    <span style={{ backgroundColor: color }} />
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
       </header>
 
       <div className="calendar-scroll">
         <section className={`calendar-grid view-${view.toLowerCase()}`} aria-label="달력">
-          {dates.map((date) => (
-            <DayColumn key={toDateKey(date)} date={date} />
-          ))}
+          {dates.map((date) => renderDayColumn(date))}
         </section>
       </div>
 
@@ -659,7 +1053,6 @@ export default function Home() {
               <section className="inbox-section" key={type} aria-label={type}>
                 <div className="section-rail">
                   <TypeIcon size={14} aria-hidden="true" />
-                  <span className="section-line" />
                   <IconButton
                     label="블록 추가"
                     className="section-add"
@@ -670,7 +1063,7 @@ export default function Home() {
                 </div>
                 <div className="section-blocks">
                   {items.map((block) => (
-                    <BlockItem key={block.id} block={block} />
+                    renderBlockItem(block)
                   ))}
                   {items.length === 0 && <div className="empty-drop" aria-hidden="true" />}
                 </div>
@@ -679,209 +1072,6 @@ export default function Home() {
           })}
         </div>
       </aside>
-
-      {editingBlock && (
-        <div className="editor-backdrop">
-          <button
-            type="button"
-            className="editor-click-away"
-            aria-label="블록 속성 닫기"
-            onClick={() => setEditingId(null)}
-          />
-          <section
-            className="block-editor"
-            role="dialog"
-            aria-modal="true"
-            aria-label="블록 속성"
-          >
-            <div className="editor-header">
-              {(() => {
-                const TypeIcon = BLOCK_META[editingBlock.type].icon;
-                return <TypeIcon size={18} aria-hidden="true" />;
-              })()}
-              <IconButton label="닫기" onClick={() => setEditingId(null)}>
-                <X size={17} />
-              </IconButton>
-            </div>
-
-            <input
-              className="editor-title"
-              aria-label="블록 내용"
-              value={editingBlock.title}
-              onChange={(event) =>
-                updateBlock(editingBlock.id, { title: event.target.value })
-              }
-            />
-
-            <div className="editor-field">
-              <CalendarDays size={16} aria-hidden="true" />
-              <input
-                type="date"
-                aria-label="날짜"
-                value={editingBlock.date ?? ""}
-                onChange={(event) => {
-                  const nextDate = event.target.value || null;
-                  const duration =
-                    editingBlock.type === "event" &&
-                    editingBlock.date &&
-                    editingBlock.endDate
-                      ? diffDays(editingBlock.date, editingBlock.endDate)
-                      : 0;
-                  updateBlock(editingBlock.id, {
-                    date: nextDate,
-                    ...(editingBlock.type === "event"
-                      ? {
-                          endDate: nextDate
-                            ? toDateKey(addDays(fromDateKey(nextDate), duration))
-                            : null,
-                        }
-                      : {}),
-                  });
-                }}
-              />
-              {editingBlock.type === "event" && (
-                <>
-                  <span>—</span>
-                  <input
-                    type="date"
-                    aria-label="끝 날짜"
-                    min={editingBlock.date ?? undefined}
-                    value={editingBlock.endDate ?? ""}
-                    onChange={(event) =>
-                      updateBlock(editingBlock.id, {
-                        endDate: event.target.value || editingBlock.date,
-                      })
-                    }
-                  />
-                </>
-              )}
-            </div>
-
-            {editingBlock.type === "time" && (
-              <div className="editor-field">
-                <Clock3 size={16} aria-hidden="true" />
-                <input
-                  type="time"
-                  aria-label="시작 시간"
-                  value={editingBlock.startTime ?? ""}
-                  onChange={(event) =>
-                    updateBlock(editingBlock.id, { startTime: event.target.value })
-                  }
-                />
-                <span>—</span>
-                <input
-                  type="time"
-                  aria-label="끝 시간"
-                  value={editingBlock.endTime ?? ""}
-                  onChange={(event) =>
-                    updateBlock(editingBlock.id, { endTime: event.target.value })
-                  }
-                />
-              </div>
-            )}
-
-            {editingBlock.type === "todo" && (
-              <>
-                <div className="editor-field">
-                  <Repeat2 size={16} aria-hidden="true" />
-                  <select
-                    aria-label="반복"
-                    value={editingBlock.repeat ?? "none"}
-                    onChange={(event) =>
-                      updateBlock(editingBlock.id, {
-                        repeat: event.target.value as Repeat,
-                      })
-                    }
-                  >
-                    <option value="none">—</option>
-                    <option value="daily">D</option>
-                    <option value="weekly">W</option>
-                    <option value="monthly">M</option>
-                  </select>
-                </div>
-                <div className="editor-field">
-                  <Link2 size={16} aria-hidden="true" />
-                  <select
-                    aria-label="부모 할일"
-                    value={editingBlock.parentId ?? ""}
-                    onChange={(event) =>
-                      updateBlock(editingBlock.id, {
-                        parentId: event.target.value || null,
-                      })
-                    }
-                  >
-                    <option value="">—</option>
-                    {data.blocks
-                      .filter(
-                        (block) =>
-                          block.type === "todo" && block.id !== editingBlock.id,
-                      )
-                      .map((block) => (
-                        <option key={block.id} value={block.id}>
-                          {block.title || "·"}
-                        </option>
-                      ))}
-                  </select>
-                </div>
-              </>
-            )}
-
-            <div className="editor-tags" aria-label="태그">
-              <Tag size={16} aria-hidden="true" />
-              <div className="editor-tag-list">
-                {data.tags.map((tagItem) => {
-                  const selected = editingBlock.tags.includes(tagItem.id);
-                  return (
-                    <button
-                      type="button"
-                      key={tagItem.id}
-                      className={`tag-chip ${selected ? "is-active" : ""}`}
-                      aria-pressed={selected}
-                      onClick={() =>
-                        updateBlock(editingBlock.id, {
-                          tags: selected
-                            ? editingBlock.tags.filter((id) => id !== tagItem.id)
-                            : [...editingBlock.tags, tagItem.id],
-                        })
-                      }
-                    >
-                      <span
-                        className="tag-dot"
-                        style={{ backgroundColor: tagItem.color }}
-                        aria-hidden="true"
-                      />
-                      {tagItem.name}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="editor-footer">
-              {editingBlock.type === "todo" && (
-                <IconButton
-                  label={editingBlock.completed ? "완료 취소" : "완료"}
-                  className={editingBlock.completed ? "is-active" : ""}
-                  onClick={() =>
-                    updateBlock(editingBlock.id, {
-                      completed: !editingBlock.completed,
-                    })
-                  }
-                >
-                  {editingBlock.completed ? (
-                    <CheckSquare2 size={17} />
-                  ) : (
-                    <Square size={17} />
-                  )}
-                </IconButton>
-              )}
-              <IconButton label="삭제" className="delete-button" onClick={() => deleteBlock(editingBlock.id)}>
-                <Trash2 size={17} />
-              </IconButton>
-            </div>
-          </section>
-        </div>
-      )}
 
       {!loaded && <div className="loading-mark"><Circle size={7} /></div>}
     </main>
