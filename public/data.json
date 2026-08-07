@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "tags": [
+    { "id": "work", "name": "업무", "color": "#262626" },
+    { "id": "personal", "name": "개인", "color": "#676767" },
+    { "id": "health", "name": "건강", "color": "#9a9a9a" },
+    { "id": "study", "name": "공부", "color": "#bdbdbd" }
+  ],
+  "blocks": [
+    {
+      "id": "event-1",
+      "type": "event",
+      "title": "프로젝트 집중 주간",
+      "date": "2026-08-03",
+      "endDate": "2026-08-07",
+      "tags": ["work"]
+    },
+    {
+      "id": "event-2",
+      "type": "event",
+      "title": "정기 검진",
+      "date": "2026-08-10",
+      "endDate": "2026-08-10",
+      "tags": ["health"]
+    },
+    {
+      "id": "todo-1",
+      "type": "todo",
+      "title": "주간 리뷰",
+      "date": "2026-08-07",
+      "tags": ["work"],
+      "completed": false,
+      "repeat": "weekly",
+      "parentId": null
+    },
+    {
+      "id": "todo-2",
+      "type": "todo",
+      "title": "기록 정리",
+      "date": "2026-08-07",
+      "tags": ["work"],
+      "completed": true,
+      "repeat": "none",
+      "parentId": "todo-1"
+    },
+    {
+      "id": "todo-3",
+      "type": "todo",
+      "title": "영어 문장 복습",
+      "date": "2026-08-08",
+      "tags": ["study"],
+      "completed": false,
+      "repeat": "daily",
+      "parentId": null
+    },
+    {
+      "id": "time-1",
+      "type": "time",
+      "title": "깊은 작업",
+      "date": "2026-08-07",
+      "tags": ["work"],
+      "startTime": "09:00",
+      "endTime": "11:30"
+    },
+    {
+      "id": "time-2",
+      "type": "time",
+      "title": "산책",
+      "date": "2026-08-07",
+      "tags": ["health"],
+      "startTime": "18:30",
+      "endTime": "19:10"
+    },
+    {
+      "id": "memo-1",
+      "type": "memo",
+      "title": "작게 시작하고 끝까지 닫기",
+      "date": "2026-08-07",
+      "tags": ["personal"]
+    },
+    {
+      "id": "inbox-1",
+      "type": "todo",
+      "title": "읽을 자료 분류",
+      "date": null,
+      "tags": ["study"],
+      "completed": false,
+      "repeat": "none",
+      "parentId": null
+    },
+    {
+      "id": "inbox-2",
+      "type": "memo",
+      "title": "다음 주 아이디어",
+      "date": null,
+      "tags": ["personal"]
+    }
+  ]
+}
